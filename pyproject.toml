@@ -53,9 +53,10 @@ dev = [
 drift-watchdog = "drift_watchdog.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/drift-watchdog"
-Repository = "https://github.com/your-org/drift-watchdog"
-Issues = "https://github.com/your-org/drift-watchdog/issues"
+Homepage = "https://github.com/NotHarshhaa/drift-watchdog"
+Repository = "https://github.com/NotHarshhaa/drift-watchdog"
+Issues = "https://github.com/NotHarshhaa/drift-watchdog/issues"
+Documentation = "https://github.com/NotHarshhaa/drift-watchdog/blob/master/README.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.spatial import distance
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 import warnings
 
 
@@ -196,11 +196,14 @@ def calculate_chi_squared(
     # Ensure no zero counts for expected
     expected_counts = np.maximum(expected_counts, 1)
     
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        statistic, pvalue = stats.chisquare(actual_counts, expected_counts)
-    
-    return float(statistic), float(pvalue)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            statistic, pvalue = stats.chisquare(actual_counts, expected_counts)
+        return float(statistic), float(pvalue)
+    except ValueError:
+        # If chi-squared test fails, return default values
+        return 0.0, 1.0
 
 
 def calculate_feature_statistics(
