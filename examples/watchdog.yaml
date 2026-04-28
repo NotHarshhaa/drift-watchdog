@@ -1,0 +1,29 @@
+# drift-watchdog configuration example
+# Copy this to your project root as watchdog.yaml
+
+baseline:
+  path: baselines/v1.json
+  storage: local                      # local | s3 | gcs
+  bucket: my-model-baselines         # Required for S3/GCS
+
+detection:
+  methods: [psi, ks_test]            # Available: psi, ks_test, jensen_shannon, wasserstein, chi_squared
+  thresholds:
+    psi: 0.2                         # 0.1 = slight, 0.2 = moderate, 0.25+ = severe
+    ks_pvalue: 0.05
+  features:
+    exclude: [id, timestamp]         # Columns to skip from drift detection
+
+alerts:
+  slack:
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    channel: "#ml-alerts"
+  pagerduty:
+    routing_key: ${PD_ROUTING_KEY}
+    severity: warning                # critical | error | warning | info
+  webhook:
+    url: https://your-endpoint.com/drift-event
+
+exporter:
+  port: 9090
+  interval_seconds: 300              # Run drift check every 5 minutes

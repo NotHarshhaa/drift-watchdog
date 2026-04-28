@@ -1,0 +1,188 @@
+# Kubernetes sidecar deployment for drift-watchdog
+# Deploy this alongside your model serving pod
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: drift-watchdog-secrets
+type: Opaque
+stringData:
+  slack-webhook: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+  pd-routing-key: "your-pagerduty-routing-key"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drift-watchdog-config
+data:
+  watchdog.yaml: |
+    baseline:
+      path: /baselines/v1.json
+      storage: local
+    
+    detection:
+      methods: [psi, ks_test]
+      thresholds:
+        psi: 0.2
+        ks_pvalue: 0.05
+      features:
+        exclude: [id, timestamp]
+    
+    alerts:
+      slack:
+        webhook_url: ${SLACK_WEBHOOK}
+        channel: "#ml-alerts"
+      pagerduty:
+        routing_key: ${PD_ROUTING_KEY}
+        severity: warning
+    
+    exporter:
+      port: 9090
+      interval_seconds: 300
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-serving-with-drift-watchdog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-serving
+  template:
+    metadata:
+      labels:
+        app: model-serving
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+        # Your main model serving container
+        - name: model-server
+          image: your-org/model-server:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: INFERENCE_LOG_PATH
+              value: "/data/inference-logs/"
+          volumeMounts:
+            - name: inference-logs
+              mountPath: /data/inference-logs
+            - name: baseline
+              mountPath: /baselines
+              readOnly: true
+        
+        # drift-watchdog sidecar
+        - name: drift-watchdog
+          image: your-org/drift-watchdog:latest
+          args:
+            - serve
+            - --baseline
+            - /baselines/v1.json
+            - --data-source
+            - /data/inference-logs/current_batch.csv
+            - --port
+            - "9090"
+            - --interval
+            - "300"
+            - --config
+            - /config/watchdog.yaml
+          env:
+            - name: SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: drift-watchdog-secrets
+                  key: slack-webhook
+            - name: PD_ROUTING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: drift-watchdog-secrets
+                  key: pd-routing-key
+          ports:
+            - containerPort: 9090
+              name: metrics
+          volumeMounts:
+            - name: inference-logs
+              mountPath: /data/inference-logs
+              readOnly: true
+            - name: baseline
+              mountPath: /baselines
+              readOnly: true
+            - name: config
+              mountPath: /config
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9090
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      
+      volumes:
+        - name: inference-logs
+          emptyDir: {}
+        - name: baseline
+          configMap:
+            name: model-baseline
+        - name: config
+          configMap:
+            name: drift-watchdog-config
+---
+# Example ConfigMap for baseline data
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-baseline
+data:
+  v1.json: |
+    {
+      "name": "production-v1",
+      "statistics": {
+        "feature1": {
+          "mean": 0.0,
+          "std": 1.0,
+          "min": -3.0,
+          "max": 3.0,
+          "median": 0.0,
+          "q25": -0.67,
+          "q75": 0.67
+        },
+        "feature2": {
+          "mean": 5.0,
+          "std": 2.0,
+          "min": 0.0,
+          "max": 10.0,
+          "median": 5.0,
+          "q25": 3.65,
+          "q75": 6.35
+        }
+      },
+      "feature_names": ["feature1", "feature2"],
+      "created_at": "2024-01-01T00:00:00",
+      "version": "1.0",
+      "metadata": {}
+    }
+---
+# Service for metrics scraping
+apiVersion: v1
+kind: Service
+metadata:
+  name: drift-watchdog-metrics
+  labels:
+    app: model-serving
+spec:
+  selector:
+    app: model-serving
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  type: ClusterIP
