@@ -22,6 +22,10 @@ Input distributions shift, upstream data pipelines change schema, feature encodi
 - **Statistical drift detection** — PSI, KS-test, Jensen-Shannon divergence, and Wasserstein distance out of the box
 - **Concept drift detection** — monitor model outputs and label distributions for performance degradation
 - **Data quality checks** — detect missing values, outliers, and unique value issues
+- **Feature correlation analysis** — detect changes in feature relationships over time
+- **Schema validation** — ensure data schema consistency between baseline and current data
+- **Drift explanation generator** — AI-powered explanations for detected drift with suggested actions
+- **Performance metrics tracking** — monitor accuracy, precision, recall, F1, and AUC-ROC over time
 - **Feature importance weighting** — weight features by importance in drift detection
 - **Custom thresholds per feature** — set different drift thresholds for different features
 - **Drift trend analysis** — track drift over time to detect gradual changes
@@ -136,6 +140,43 @@ drift-watchdog check \
   --feature-importance feature_importance.json \
   --custom-thresholds custom_thresholds.json
 ```
+
+### 8. Schema validation
+
+Ensure data schema consistency between baseline and current data:
+
+```bash
+drift-watchdog schema-validate \
+  --baseline reference_data.csv \
+  --current current_batch.csv \
+  --strict
+```
+
+### 9. Correlation analysis
+
+Detect changes in feature relationships over time:
+
+```bash
+drift-watchdog correlation-check \
+  --baseline reference_data.csv \
+  --current current_batch.csv \
+  --threshold 0.3 \
+  --method pearson
+```
+
+### 10. Drift explanation
+
+Generate AI-powered explanations for detected drift:
+
+```bash
+drift-watchdog check \
+  --baseline baselines/v1.json \
+  --current current_batch.csv \
+  --threshold 0.2 \
+  --explain
+```
+
+This provides detailed explanations of why drift occurred and suggested actions to take.
 
 ---
 
@@ -275,8 +316,9 @@ It includes panels for:
 - [x] **v1.0** — CLI, PSI + KS detection, local/S3/GCS baselines, Slack/PagerDuty/webhook alerts, Prometheus exporter, Grafana dashboard, Kubernetes sidecar example, watchdog.yaml config
 - [x] **v1.1** — Concept drift detection (output/label distribution monitoring), HTML report export
 - [x] **v1.2** — Data quality checks, feature importance weighting, custom thresholds per feature, drift trend analysis
-- [ ] **v1.3** — GitHub Actions integration, CI drift gate
-- [ ] **v1.4** — Multi-model support
+- [x] **v1.3** — Feature correlation analysis, schema validation, drift explanation generator, performance metrics tracking
+- [ ] **v1.4** — GitHub Actions integration, CI drift gate
+- [ ] **v1.5** — Multi-model support
 
 ---
 

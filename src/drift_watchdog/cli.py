@@ -29,6 +29,9 @@ from drift_watchdog.concept_drift import ConceptDriftDetector
 from drift_watchdog.reporting import HTMLReportGenerator
 from drift_watchdog.data_quality import DataQualityChecker
 from drift_watchdog.trend_analysis import DriftTrendAnalyzer
+from drift_watchdog.correlation_analysis import CorrelationAnalyzer
+from drift_watchdog.schema_validator import SchemaValidator
+from drift_watchdog.drift_explainer import DriftExplainer
 
 # Create console instance
 console = Console()
@@ -189,7 +192,7 @@ def display_drift_result(result: DriftResult, threshold: float):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="1.2.0", prog_name="drift-watchdog")
+@click.version_option(version="1.3.0", prog_name="drift-watchdog")
 def main(ctx):
     """drift-watchdog: Lightweight ML model drift detection."""
     if ctx.invoked_subcommand is None:
@@ -296,6 +299,7 @@ def create_baseline(data: str, output: str, name: str, exclude: tuple, storage: 
 @click.option("--report", "-r", help="Path to save HTML report")
 @click.option("--feature-importance", "-fi", help="JSON file with feature importance weights")
 @click.option("--custom-thresholds", "-ct", help="JSON file with custom thresholds per feature")
+@click.option("--explain", "-e", is_flag=True, help="Generate drift explanation")
 def check_drift(
     baseline: str,
     current: str,
@@ -306,6 +310,7 @@ def check_drift(
     report: Optional[str],
     feature_importance: Optional[str],
     custom_thresholds: Optional[str],
+    explain: bool,
 ):
     """Run drift detection check."""
     console.print()
@@ -410,6 +415,14 @@ def check_drift(
             html_report = HTMLReportGenerator.generate_drift_report(result, threshold)
             HTMLReportGenerator.save_report(html_report, report)
         console.print(f"[green]✓[/green] HTML report saved successfully")
+    
+    # Generate drift explanation if requested
+    if explain:
+        console.print()
+        with Status("[bold yellow]Generating drift explanation...", console=console, spinner="dots"):
+            explainer = DriftExplainer()
+            explanation = explainer.explain(result)
+        display_drift_explanation(explanation)
     
     console.print()
     console.print(Rule(style="cyan"))
@@ -688,6 +701,302 @@ def display_data_quality_result(result, missing_threshold: float, outlier_thresh
     
     console.print(table)
     console.print()
+
+
+def display_drift_explanation(explanation):
+    """Display drift explanation result."""
+    console.print()
+    console.print(Rule(title="[bold cyan]Drift Explanation[/bold cyan]", style="cyan"))
+    console.print()
+    
+    # Overall explanation
+    console.print(Panel(
+        explanation.overall_explanation,
+        title="[bold]📋 Overall Assessment[/bold]",
+        border_style="cyan",
+        box=box.ROUNDED,
+    ))
+    console.print()
+    
+    # Primary drivers
+    if explanation.primary_drivers:
+        table = Table(
+            title="[bold]🎯 Primary Drift Drivers[/bold]",
+            box=box.ROUNDED,
+            header_style="bold magenta",
+            border_style="red",
+            show_lines=True,
+        )
+        
+        table.add_column("Feature", style="cyan", width=20)
+        table.add_column("Contribution", justify="right", width=12)
+        table.add_column("Type", width=18)
+        table.add_column("Severity", justify="center", width=10)
+        
+        for driver in explanation.primary_drivers:
+            severity_style = get_severity_style(driver.severity)
+            table.add_row(
+                driver.feature_name,
+                f"{driver.contribution_score:.2%}",
+                driver.drift_type,
+                f"[{severity_style}]{driver.severity.upper()}[/{severity_style}]",
+            )
+        
+        console.print(table)
+        console.print()
+        
+        # Suggested actions
+        console.print(Panel(
+            "\n".join([f"• {driver.suggested_action}" for driver in explanation.primary_drivers]),
+            title="[bold]💡 Suggested Actions[/bold]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        ))
+        console.print()
+    
+    # Summary statistics
+    stats_table = Table(box=box.ROUNDED, border_style="blue", show_header=False)
+    stats_table.add_column("Metric", style="cyan")
+    stats_table.add_column("Value", style="white")
+    
+    for key, value in explanation.summary_statistics.items():
+        stats_table.add_row(key.replace("_", " ").title(), str(value))
+    
+    console.print(Panel(
+        stats_table,
+        title="[bold]📊 Summary Statistics[/bold]",
+        border_style="blue",
+        box=box.ROUNDED,
+    ))
+    console.print()
+
+
+@main.command("schema-validate")
+@click.option("--baseline", "-b", required=True, help="Path to baseline data CSV")
+@click.option("--current", "-c", required=True, help="Path to current data CSV")
+@click.option("--strict", is_flag=True, help="Treat all mismatches as errors")
+def validate_schema(
+    baseline: str,
+    current: str,
+    strict: bool,
+):
+    """Validate data schema consistency."""
+    console.print()
+    console.print(Rule(title="[bold cyan]Schema Validation[/bold cyan]", style="cyan"))
+    console.print()
+    
+    try:
+        # Load data
+        with Status(f"[bold yellow]Loading data...", console=console, spinner="dots"):
+            baseline_df = pd.read_csv(baseline)
+            current_df = pd.read_csv(current)
+        console.print(f"[green]✓[/green] Loaded baseline: [bold]{len(baseline_df)}[/bold] rows, [bold]{len(baseline_df.columns)}[/bold] columns")
+        console.print(f"[green]✓[/green] Loaded current: [bold]{len(current_df)}[/bold] rows, [bold]{len(current_df.columns)}[/bold] columns")
+        console.print()
+        
+        # Run validation
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold yellow]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Validating schema...", total=None)
+            
+            validator = SchemaValidator(strict=strict)
+            result = validator.validate(baseline_df, current_df)
+            progress.update(task, completed=True)
+        
+        # Display results
+        display_schema_result(result)
+        
+        console.print()
+        console.print(Rule(style="cyan"))
+        console.print()
+        
+        # Exit with error code if invalid
+        sys.exit(0 if result.is_valid else 1)
+        
+    except Exception as e:
+        console.print()
+        console.print(Panel(
+            f"[bold red]Error:[/bold red] {str(e)}",
+            title="[bold red]Schema Validation Failed[/bold red]",
+            border_style="red",
+            box=box.ROUNDED,
+        ))
+        sys.exit(1)
+
+
+def display_schema_result(result):
+    """Display schema validation result."""
+    status_emoji = "🟢" if result.is_valid else "🔴"
+    status_text = "VALID" if result.is_valid else "INVALID"
+    status_style = "bold green" if result.is_valid else "bold red"
+    
+    summary_content = f"""
+{status_emoji} Status: [{status_style}]{status_text}[/{status_style}]
+📋 Baseline Features: {len(result.baseline_features)}
+📋 Current Features: {len(result.current_features)}
+❌ Missing Features: {len(result.missing_features)}
+➕ Extra Features: {len(result.extra_features)}
+⚠️  Type Mismatches: {len(result.type_mismatches)}
+"""
+    
+    console.print(Panel(
+        summary_content.strip(),
+        title="[bold]🐕 Schema Validation Summary[/bold]",
+        border_style="green" if result.is_valid else "red",
+        box=box.ROUNDED,
+    ))
+    console.print()
+    
+    # Display issues
+    if result.issues:
+        table = Table(
+            title="[bold]⚠️ Schema Issues[/bold]",
+            box=box.ROUNDED,
+            header_style="bold magenta",
+            border_style="yellow",
+            show_lines=True,
+        )
+        
+        table.add_column("Type", style="cyan", width=18)
+        table.add_column("Feature", style="white", width=20)
+        table.add_column("Expected", style="yellow", width=25)
+        table.add_column("Actual", style="red", width=25)
+        table.add_column("Severity", justify="center", width=10)
+        
+        for issue in result.issues:
+            severity_style = "bold red" if issue.severity == "error" else "yellow"
+            table.add_row(
+                issue.issue_type,
+                issue.feature_name,
+                issue.expected,
+                issue.actual,
+                f"[{severity_style}]{issue.severity.upper()}[/{severity_style}]",
+            )
+        
+        console.print(table)
+        console.print()
+
+
+@main.command("correlation-check")
+@click.option("--baseline", "-b", required=True, help="Path to baseline data CSV")
+@click.option("--current", "-c", required=True, help="Path to current data CSV")
+@click.option("--threshold", "-t", default=0.3, type=float, help="Significance threshold for correlation change")
+@click.option("--method", default="pearson", help="Correlation method (pearson, spearman, kendall)")
+def check_correlation(
+    baseline: str,
+    current: str,
+    threshold: float,
+    method: str,
+):
+    """Analyze feature correlation changes."""
+    console.print()
+    console.print(Rule(title="[bold cyan]Correlation Analysis[/bold cyan]", style="cyan"))
+    console.print()
+    
+    try:
+        # Load data
+        with Status(f"[bold yellow]Loading data...", console=console, spinner="dots"):
+            baseline_df = pd.read_csv(baseline)
+            current_df = pd.read_csv(current)
+        console.print(f"[green]✓[/green] Loaded baseline: [bold]{len(baseline_df)}[/bold] rows")
+        console.print(f"[green]✓[/green] Loaded current: [bold]{len(current_df)}[/bold] rows")
+        console.print()
+        
+        # Run analysis
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold yellow]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Analyzing correlations...", total=None)
+            
+            analyzer = CorrelationAnalyzer(significance_threshold=threshold)
+            result = analyzer.analyze(baseline_df, current_df, method=method)
+            progress.update(task, completed=True)
+        
+        # Display results
+        display_correlation_result(result, threshold)
+        
+        console.print()
+        console.print(Rule(style="cyan"))
+        console.print()
+        
+        # Exit with error code if drift detected
+        sys.exit(1 if result.is_drift_detected else 0)
+        
+    except Exception as e:
+        console.print()
+        console.print(Panel(
+            f"[bold red]Error:[/bold red] {str(e)}",
+            title="[bold red]Correlation Analysis Failed[/bold red]",
+            border_style="red",
+            box=box.ROUNDED,
+        ))
+        sys.exit(1)
+
+
+def display_correlation_result(result, threshold: float):
+    """Display correlation analysis result."""
+    status_emoji = "🔴" if result.is_drift_detected else "🟢"
+    status_text = "DRIFT DETECTED" if result.is_drift_detected else "NO DRIFT"
+    status_style = "bold red" if result.is_drift_detected else "bold green"
+    
+    summary_content = f"""
+{status_emoji} Status: [{status_style}]{status_text}[/{status_style}]
+📊 Overall Correlation Drift: {result.overall_correlation_drift:.4f}
+⚙️  Significance Threshold: {threshold}
+📋 Feature Pairs Analyzed: {result.total_pairs}
+⚠️  Significant Changes: {result.significant_changes}
+"""
+    
+    console.print(Panel(
+        summary_content.strip(),
+        title="[bold]🐕 Correlation Analysis Summary[/bold]",
+        border_style="red" if result.is_drift_detected else "green",
+        box=box.ROUNDED,
+    ))
+    console.print()
+    
+    # Display top changes
+    if result.correlation_changes:
+        top_changes = sorted(
+            result.correlation_changes,
+            key=lambda x: x.correlation_change,
+            reverse=True,
+        )[:10]
+        
+        table = Table(
+            title="[bold]📊 Top Correlation Changes[/bold]",
+            box=box.ROUNDED,
+            header_style="bold magenta",
+            border_style="blue",
+            show_lines=True,
+        )
+        
+        table.add_column("Feature 1", style="cyan", width=15)
+        table.add_column("Feature 2", style="cyan", width=15)
+        table.add_column("Baseline", justify="right", width=12)
+        table.add_column("Current", justify="right", width=12)
+        table.add_column("Change", justify="right", width=12)
+        table.add_column("Significant", justify="center", width=12)
+        
+        for change in top_changes:
+            significant = "✓" if change.is_significant else "✗"
+            significant_style = "bold red" if change.is_significant else "green"
+            table.add_row(
+                change.feature1,
+                change.feature2,
+                f"{change.baseline_correlation:.3f}",
+                f"{change.current_correlation:.3f}",
+                f"{change.correlation_change:+.3f}",
+                f"[{significant_style}]{significant}[/{significant_style}]",
+            )
+        
+        console.print(table)
+        console.print()
 
 
 @main.command("serve")
