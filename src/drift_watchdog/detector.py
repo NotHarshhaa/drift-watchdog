@@ -24,6 +24,8 @@ class DriftDetector:
         ks_pvalue_threshold: float = 0.05,
         js_threshold: float = 0.1,
         methods: Optional[list[str]] = None,
+        feature_importance: Optional[Dict[str, float]] = None,
+        custom_thresholds: Optional[Dict[str, float]] = None,
     ):
         """
         Initialize drift detector.
@@ -34,12 +36,16 @@ class DriftDetector:
             ks_pvalue_threshold: KS test p-value threshold
             js_threshold: Jensen-Shannon divergence threshold
             methods: Detection methods to use (psi, ks_test, jensen_shannon, wasserstein, chi_squared)
+            feature_importance: Dictionary mapping feature names to importance weights (0-1)
+            custom_thresholds: Dictionary mapping feature names to custom PSI thresholds
         """
         self.baseline = baseline
         self.psi_threshold = psi_threshold
         self.ks_pvalue_threshold = ks_pvalue_threshold
         self.js_threshold = js_threshold
         self.methods = methods or ["psi", "ks_test", "jensen_shannon"]
+        self.feature_importance = feature_importance or {}
+        self.custom_thresholds = custom_thresholds or {}
     
     def check(
         self,
@@ -109,11 +115,14 @@ class DriftDetector:
         wasserstein = calculate_wasserstein(expected_values, current_values)
         chi_stat, chi_pvalue = calculate_chi_squared(expected_values, current_values)
         
+        # Use custom threshold if available, otherwise use default
+        threshold = self.custom_thresholds.get(feature_name, self.psi_threshold)
+        
         # Determine if drift is detected
         is_drift = False
         drift_severity = "none"
         
-        if "psi" in self.methods and psi >= self.psi_threshold:
+        if "psi" in self.methods and psi >= threshold:
             is_drift = True
             if psi >= 0.25:
                 drift_severity = "severe"
@@ -182,6 +191,18 @@ class DriftDetector:
         if not feature_reports:
             return 0.0
         
-        # Use mean PSI as overall score
-        psi_values = [report.psi for report in feature_reports.values()]
-        return np.mean(psi_values)
+        # Calculate weighted average using feature importance if available
+        if self.feature_importance:
+            total_weight = 0.0
+            weighted_sum = 0.0
+            
+            for feature_name, report in feature_reports.items():
+                weight = self.feature_importance.get(feature_name, 1.0)
+                weighted_sum += report.psi * weight
+                total_weight += weight
+            
+            return float(weighted_sum / total_weight) if total_weight > 0 else 0.0
+        else:
+            # Use mean PSI as overall score (default behavior)
+            psi_values = [report.psi for report in feature_reports.values()]
+            return float(np.mean(psi_values))

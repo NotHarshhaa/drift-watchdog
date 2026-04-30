@@ -21,6 +21,10 @@ Input distributions shift, upstream data pipelines change schema, feature encodi
 
 - **Statistical drift detection** — PSI, KS-test, Jensen-Shannon divergence, and Wasserstein distance out of the box
 - **Concept drift detection** — monitor model outputs and label distributions for performance degradation
+- **Data quality checks** — detect missing values, outliers, and unique value issues
+- **Feature importance weighting** — weight features by importance in drift detection
+- **Custom thresholds per feature** — set different drift thresholds for different features
+- **Drift trend analysis** — track drift over time to detect gradual changes
 - **HTML report export** — generate beautiful, shareable HTML reports for drift analysis
 - **Prometheus exporter** — exposes `/metrics` endpoint, plug straight into your existing Grafana stack
 - **CLI first** — run ad-hoc drift checks in CI/CD or cron without writing any code
@@ -100,6 +104,37 @@ drift-watchdog concept-check \
   --current-labels current_labels.csv \
   --threshold 0.2 \
   --report concept_drift_report.html
+```
+
+### 6. Data quality check
+
+Check your data for missing values, outliers, and other quality issues:
+
+```bash
+drift-watchdog quality-check \
+  --data current_batch.csv \
+  --missing-threshold 0.1 \
+  --outlier-threshold 0.05 \
+  --outlier-method iqr
+```
+
+### 7. Advanced drift check with feature importance
+
+Weight important features more heavily in drift detection:
+
+```bash
+# Create feature importance JSON
+echo '{"age": 0.8, "income": 0.9, "loan_amount": 0.7}' > feature_importance.json
+
+# Create custom thresholds JSON
+echo '{"credit_score": 0.15, "income": 0.25}' > custom_thresholds.json
+
+drift-watchdog check \
+  --baseline baselines/v1.json \
+  --current current_batch.csv \
+  --threshold 0.2 \
+  --feature-importance feature_importance.json \
+  --custom-thresholds custom_thresholds.json
 ```
 
 ---
@@ -239,8 +274,9 @@ It includes panels for:
 
 - [x] **v1.0** — CLI, PSI + KS detection, local/S3/GCS baselines, Slack/PagerDuty/webhook alerts, Prometheus exporter, Grafana dashboard, Kubernetes sidecar example, watchdog.yaml config
 - [x] **v1.1** — Concept drift detection (output/label distribution monitoring), HTML report export
-- [ ] **v1.2** — GitHub Actions integration, CI drift gate
-- [ ] **v1.3** — Multi-model support
+- [x] **v1.2** — Data quality checks, feature importance weighting, custom thresholds per feature, drift trend analysis
+- [ ] **v1.3** — GitHub Actions integration, CI drift gate
+- [ ] **v1.4** — Multi-model support
 
 ---
 

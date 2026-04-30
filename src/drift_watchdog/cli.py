@@ -27,6 +27,8 @@ from drift_watchdog.alerts import AlertManager
 from drift_watchdog.models import DriftResult
 from drift_watchdog.concept_drift import ConceptDriftDetector
 from drift_watchdog.reporting import HTMLReportGenerator
+from drift_watchdog.data_quality import DataQualityChecker
+from drift_watchdog.trend_analysis import DriftTrendAnalyzer
 
 # Create console instance
 console = Console()
@@ -187,7 +189,7 @@ def display_drift_result(result: DriftResult, threshold: float):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="1.1.0", prog_name="drift-watchdog")
+@click.version_option(version="1.2.0", prog_name="drift-watchdog")
 def main(ctx):
     """drift-watchdog: Lightweight ML model drift detection."""
     if ctx.invoked_subcommand is None:
@@ -292,6 +294,8 @@ def create_baseline(data: str, output: str, name: str, exclude: tuple, storage: 
 @click.option("--methods", "-m", multiple=True, help="Detection methods to use")
 @click.option("--alert", is_flag=True, help="Send alerts if drift detected")
 @click.option("--report", "-r", help="Path to save HTML report")
+@click.option("--feature-importance", "-fi", help="JSON file with feature importance weights")
+@click.option("--custom-thresholds", "-ct", help="JSON file with custom thresholds per feature")
 def check_drift(
     baseline: str,
     current: str,
@@ -300,6 +304,8 @@ def check_drift(
     methods: tuple,
     alert: bool,
     report: Optional[str],
+    feature_importance: Optional[str],
+    custom_thresholds: Optional[str],
 ):
     """Run drift detection check."""
     console.print()
@@ -347,6 +353,24 @@ def check_drift(
     console.print(f"[green]✓[/green] Detection methods: [cyan]{', '.join(detection_methods)}[/cyan]")
     console.print()
     
+    # Load feature importance if provided
+    feature_importance_dict = {}
+    if feature_importance:
+        import json
+        with open(feature_importance, 'r') as f:
+            feature_importance_dict = json.load(f)
+        console.print(f"[green]✓[/green] Loaded feature importance from [cyan]{feature_importance}[/cyan]")
+    
+    # Load custom thresholds if provided
+    custom_thresholds_dict = {}
+    if custom_thresholds:
+        import json
+        with open(custom_thresholds, 'r') as f:
+            custom_thresholds_dict = json.load(f)
+        console.print(f"[green]✓[/green] Loaded custom thresholds from [cyan]{custom_thresholds}[/cyan]")
+    
+    console.print()
+    
     # Run detection
     with Progress(
         SpinnerColumn(),
@@ -359,6 +383,8 @@ def check_drift(
             baseline=baseline_obj,
             psi_threshold=threshold,
             methods=detection_methods,
+            feature_importance=feature_importance_dict,
+            custom_thresholds=custom_thresholds_dict,
         )
         
         result = detector.check(current_df, exclude_features=exclude_features)
@@ -537,6 +563,126 @@ def display_concept_drift_result(result, threshold: float):
             f"{report.ks_statistic:.3f}",
             f"{report.jensen_shannon:.3f}",
             acc_change_str,
+            severity_display,
+        )
+    
+    console.print(table)
+    console.print()
+
+
+@main.command("quality-check")
+@click.option("--data", "-d", required=True, help="Path to data CSV file")
+@click.option("--missing-threshold", "-m", default=0.1, type=float, help="Missing value threshold (0-1)")
+@click.option("--outlier-threshold", "-o", default=0.05, type=float, help="Outlier threshold (0-1)")
+@click.option("--outlier-method", default="iqr", help="Outlier detection method (iqr, zscore)")
+def check_data_quality(
+    data: str,
+    missing_threshold: float,
+    outlier_threshold: float,
+    outlier_method: str,
+):
+    """Run data quality check on dataset."""
+    console.print()
+    console.print(Rule(title="[bold cyan]Data Quality Check[/bold cyan]", style="cyan"))
+    console.print()
+    
+    try:
+        # Load data
+        with Status(f"[bold yellow]Loading data from {data}...", console=console, spinner="dots"):
+            df = pd.read_csv(data)
+        console.print(f"[green]✓[/green] Loaded [bold]{len(df)}[/bold] rows with [bold]{len(df.columns)}[/bold] columns")
+        console.print()
+        
+        # Run quality check
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold yellow]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running data quality check...", total=None)
+            
+            checker = DataQualityChecker(
+                missing_threshold=missing_threshold,
+                outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
+            )
+            result = checker.check(df)
+            progress.update(task, completed=True)
+        
+        # Display results
+        display_data_quality_result(result, missing_threshold, outlier_threshold)
+        
+        console.print()
+        console.print(Rule(style="cyan"))
+        console.print()
+        
+        # Exit with error code if issues detected
+        sys.exit(1 if result.has_issues else 0)
+        
+    except Exception as e:
+        console.print()
+        console.print(Panel(
+            f"[bold red]Error:[/bold red] {str(e)}",
+            title="[bold red]Data Quality Check Failed[/bold red]",
+            border_style="red",
+            box=box.ROUNDED,
+        ))
+        sys.exit(1)
+
+
+def display_data_quality_result(result, missing_threshold: float, outlier_threshold: float):
+    """Display data quality check result."""
+    # Overall status panel
+    status_emoji = "🔴" if result.has_issues else "🟢"
+    status_text = "ISSUES DETECTED" if result.has_issues else "NO ISSUES"
+    status_style = "bold red" if result.has_issues else "bold green"
+    
+    summary_content = f"""
+{status_emoji} Status: [{status_style}]{status_text}[/{status_style}]
+📊 Quality Score: {result.overall_quality_score:.2%}
+⚙️  Missing Threshold: {missing_threshold:.1%}
+⚙️  Outlier Threshold: {outlier_threshold:.1%}
+🕐 Timestamp: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+📋 Features Checked: {len(result.features)}
+⚠️  Features with Issues: {len([f for f in result.features.values() if f.is_issue])}
+"""
+    
+    console.print(Panel(
+        summary_content.strip(),
+        title="[bold]🐕 Data Quality Check Summary[/bold]",
+        border_style="red" if result.has_issues else "green",
+        box=box.ROUNDED,
+    ))
+    console.print()
+    
+    # Feature details table
+    table = Table(
+        title="[bold]📊 Feature Quality Analysis[/bold]",
+        box=box.ROUNDED,
+        header_style="bold magenta",
+        border_style="blue",
+        show_lines=True,
+    )
+    
+    table.add_column("Status", justify="center", width=8)
+    table.add_column("Feature", style="cyan", width=20)
+    table.add_column("Missing %", justify="right", width=12)
+    table.add_column("Outlier %", justify="right", width=12)
+    table.add_column("Unique %", justify="right", width=12)
+    table.add_column("Severity", justify="center", width=12)
+    
+    for feature_name, report in result.features.items():
+        emoji = "🔴" if report.is_issue else "🟢"
+        severity_style = get_severity_style(report.issue_severity) if report.is_issue else "green"
+        
+        severity_display = f"[{severity_style}]{report.issue_severity.upper()}[/{severity_style}]" if report.is_issue else "[green]OK[/green]"
+        
+        table.add_row(
+            emoji,
+            feature_name,
+            f"{report.missing_percentage:.2%}",
+            f"{report.outlier_percentage:.2%}",
+            f"{report.unique_percentage:.2%}",
             severity_display,
         )
     
