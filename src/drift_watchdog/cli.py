@@ -25,6 +25,8 @@ from drift_watchdog.exporter import PrometheusExporter
 from drift_watchdog.config import Config
 from drift_watchdog.alerts import AlertManager
 from drift_watchdog.models import DriftResult
+from drift_watchdog.concept_drift import ConceptDriftDetector
+from drift_watchdog.reporting import HTMLReportGenerator
 
 # Create console instance
 console = Console()
@@ -185,7 +187,7 @@ def display_drift_result(result: DriftResult, threshold: float):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version="1.0.0", prog_name="drift-watchdog")
+@click.version_option(version="1.1.0", prog_name="drift-watchdog")
 def main(ctx):
     """drift-watchdog: Lightweight ML model drift detection."""
     if ctx.invoked_subcommand is None:
@@ -289,6 +291,7 @@ def create_baseline(data: str, output: str, name: str, exclude: tuple, storage: 
 @click.option("--config", "-f", help="Path to configuration file")
 @click.option("--methods", "-m", multiple=True, help="Detection methods to use")
 @click.option("--alert", is_flag=True, help="Send alerts if drift detected")
+@click.option("--report", "-r", help="Path to save HTML report")
 def check_drift(
     baseline: str,
     current: str,
@@ -296,6 +299,7 @@ def check_drift(
     config: Optional[str],
     methods: tuple,
     alert: bool,
+    report: Optional[str],
 ):
     """Run drift detection check."""
     console.print()
@@ -373,12 +377,171 @@ def check_drift(
             else:
                 console.print("[yellow]⚠[/yellow] Failed to send some alerts")
     
+    # Generate HTML report if requested
+    if report:
+        console.print()
+        with Status(f"[bold yellow]Generating HTML report at {report}...", console=console, spinner="dots"):
+            html_report = HTMLReportGenerator.generate_drift_report(result, threshold)
+            HTMLReportGenerator.save_report(html_report, report)
+        console.print(f"[green]✓[/green] HTML report saved successfully")
+    
     console.print()
     console.print(Rule(style="cyan"))
     console.print()
     
     # Exit with error code if drift detected
     sys.exit(1 if result.overall_drift else 0)
+
+
+@main.command("concept-check")
+@click.option("--baseline-predictions", "-bp", required=True, help="Path to baseline predictions CSV")
+@click.option("--baseline-labels", "-bl", required=True, help="Path to baseline labels CSV")
+@click.option("--current-predictions", "-cp", required=True, help="Path to current predictions CSV")
+@click.option("--current-labels", "-cl", required=True, help="Path to current labels CSV")
+@click.option("--threshold", "-t", default=0.2, type=float, help="Drift threshold")
+@click.option("--report", "-r", help="Path to save HTML report")
+def check_concept_drift(
+    baseline_predictions: str,
+    baseline_labels: str,
+    current_predictions: str,
+    current_labels: str,
+    threshold: float,
+    report: Optional[str],
+):
+    """Run concept drift detection check on model outputs/labels."""
+    console.print()
+    console.print(Rule(title="[bold cyan]Concept Drift Detection[/bold cyan]", style="cyan"))
+    console.print()
+    
+    try:
+        # Load data
+        with Status("[bold yellow]Loading baseline data...", console=console, spinner="dots"):
+            baseline_pred_df = pd.read_csv(baseline_predictions)
+            baseline_label_df = pd.read_csv(baseline_labels)
+        console.print(f"[green]✓[/green] Loaded baseline data")
+        
+        with Status("[bold yellow]Loading current data...", console=console, spinner="dots"):
+            current_pred_df = pd.read_csv(current_predictions)
+            current_label_df = pd.read_csv(current_labels)
+        console.print(f"[green]✓[/green] Loaded current data")
+        
+        # Extract arrays (assuming single column)
+        baseline_preds = baseline_pred_df.iloc[:, 0].values
+        baseline_labels_arr = baseline_label_df.iloc[:, 0].values
+        current_preds = current_pred_df.iloc[:, 0].values
+        current_labels_arr = current_label_df.iloc[:, 0].values
+        
+        console.print(f"[green]✓[/green] Baseline samples: [bold]{len(baseline_preds)}[/bold]")
+        console.print(f"[green]✓[/green] Current samples: [bold]{len(current_preds)}[/bold]")
+        console.print()
+        
+        # Run detection
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold yellow]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running concept drift detection...", total=None)
+            
+            detector = ConceptDriftDetector(psi_threshold=threshold)
+            result = detector.check(
+                baseline_predictions=baseline_preds,
+                baseline_labels=baseline_labels_arr,
+                current_predictions=current_preds,
+                current_labels=current_labels_arr,
+            )
+            progress.update(task, completed=True)
+        
+        # Display results
+        display_concept_drift_result(result, threshold)
+        
+        # Generate HTML report if requested
+        if report:
+            console.print()
+            with Status(f"[bold yellow]Generating HTML report at {report}...", console=console, spinner="dots"):
+                html_report = HTMLReportGenerator.generate_concept_drift_report(result, threshold)
+                HTMLReportGenerator.save_report(html_report, report)
+            console.print(f"[green]✓[/green] HTML report saved successfully")
+        
+        console.print()
+        console.print(Rule(style="cyan"))
+        console.print()
+        
+        # Exit with error code if drift detected
+        sys.exit(1 if result.overall_drift else 0)
+        
+    except Exception as e:
+        console.print()
+        console.print(Panel(
+            f"[bold red]Error:[/bold red] {str(e)}",
+            title="[bold red]Concept Drift Check Failed[/bold red]",
+            border_style="red",
+            box=box.ROUNDED,
+        ))
+        sys.exit(1)
+
+
+def display_concept_drift_result(result, threshold: float):
+    """Display concept drift detection result."""
+    # Overall status panel
+    status_emoji = "🔴" if result.overall_drift else "🟢"
+    status_text = "DRIFT DETECTED" if result.overall_drift else "NO DRIFT"
+    status_style = "bold red" if result.overall_drift else "bold green"
+    
+    summary_content = f"""
+{status_emoji} Status: [{status_style}]{status_text}[/{status_style}]
+📊 Overall Score: {result.overall_score:.4f}
+⚙️  Threshold: {threshold}
+🕐 Timestamp: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+📋 Metrics Checked: {len(result.metrics)}
+⚠️  Drifted Metrics: {len([m for m in result.metrics.values() if m.is_drift])}
+"""
+    
+    console.print(Panel(
+        summary_content.strip(),
+        title="[bold]🐕 Concept Drift Detection Summary[/bold]",
+        border_style="red" if result.overall_drift else "green",
+        box=box.ROUNDED,
+    ))
+    console.print()
+    
+    # Metrics details table
+    table = Table(
+        title="[bold]📊 Metric Analysis[/bold]",
+        box=box.ROUNDED,
+        header_style="bold magenta",
+        border_style="blue",
+        show_lines=True,
+    )
+    
+    table.add_column("Status", justify="center", width=8)
+    table.add_column("Metric", style="cyan", width=15)
+    table.add_column("PSI", justify="right", width=10)
+    table.add_column("KS Stat", justify="right", width=10)
+    table.add_column("JS Div", justify="right", width=10)
+    table.add_column("Accuracy Change", justify="right", width=15)
+    table.add_column("Severity", justify="center", width=12)
+    
+    for metric_name, report in result.metrics.items():
+        emoji = get_severity_emoji(report.drift_severity)
+        severity_style = get_severity_style(report.drift_severity)
+        
+        severity_display = f"[{severity_style}]{report.drift_severity.upper()}[/{severity_style}]" if report.is_drift else "[green]OK[/green]"
+        
+        acc_change_str = f"{report.accuracy_change:+.4f}" if report.metric_name == "accuracy" else "N/A"
+        
+        table.add_row(
+            emoji,
+            metric_name,
+            f"{report.psi:.3f}",
+            f"{report.ks_statistic:.3f}",
+            f"{report.jensen_shannon:.3f}",
+            acc_change_str,
+            severity_display,
+        )
+    
+    console.print(table)
+    console.print()
 
 
 @main.command("serve")

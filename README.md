@@ -20,6 +20,8 @@ Input distributions shift, upstream data pipelines change schema, feature encodi
 ## Features
 
 - **Statistical drift detection** — PSI, KS-test, Jensen-Shannon divergence, and Wasserstein distance out of the box
+- **Concept drift detection** — monitor model outputs and label distributions for performance degradation
+- **HTML report export** — generate beautiful, shareable HTML reports for drift analysis
 - **Prometheus exporter** — exposes `/metrics` endpoint, plug straight into your existing Grafana stack
 - **CLI first** — run ad-hoc drift checks in CI/CD or cron without writing any code
 - **Alert integrations** — Slack, PagerDuty, and webhook support
@@ -73,6 +75,32 @@ drift-watchdog serve \
 ```
 
 Metrics are now available at `http://localhost:9090/metrics`.
+
+### 4. Generate HTML report
+
+```bash
+drift-watchdog check \
+  --baseline baselines/v1.json \
+  --current current_batch.csv \
+  --threshold 0.2 \
+  --report drift_report.html
+```
+
+This generates a beautiful, shareable HTML report with detailed drift analysis.
+
+### 5. Concept drift detection
+
+Monitor model outputs and label distributions for performance degradation:
+
+```bash
+drift-watchdog concept-check \
+  --baseline-predictions baseline_preds.csv \
+  --baseline-labels baseline_labels.csv \
+  --current-predictions current_preds.csv \
+  --current-labels current_labels.csv \
+  --threshold 0.2 \
+  --report concept_drift_report.html
+```
 
 ---
 
@@ -210,9 +238,9 @@ It includes panels for:
 ## Roadmap
 
 - [x] **v1.0** — CLI, PSI + KS detection, local/S3/GCS baselines, Slack/PagerDuty/webhook alerts, Prometheus exporter, Grafana dashboard, Kubernetes sidecar example, watchdog.yaml config
-- [ ] **v1.1** — Concept drift detection (output/label distribution monitoring)
+- [x] **v1.1** — Concept drift detection (output/label distribution monitoring), HTML report export
 - [ ] **v1.2** — GitHub Actions integration, CI drift gate
-- [ ] **v1.3** — Multi-model support, drift report HTML exports
+- [ ] **v1.3** — Multi-model support
 
 ---
 
