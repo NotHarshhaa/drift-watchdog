@@ -104,9 +104,18 @@ class DriftDetector:
         Returns:
             FeatureReport with drift analysis
         """
-        # Generate synthetic expected distribution from baseline statistics
         baseline_stats = self.baseline.statistics[feature_name]
-        expected_values = self._generate_expected_distribution(baseline_stats, len(current_values))
+        
+        # Use histogram data from baseline if available, otherwise fall back to synthetic generation
+        if "histogram_bins" in baseline_stats and "histogram_counts" in baseline_stats:
+            expected_values = self._generate_from_histogram(
+                baseline_stats["histogram_bins"],
+                baseline_stats["histogram_counts"],
+                len(current_values)
+            )
+        else:
+            # Fallback to synthetic distribution generation for backward compatibility
+            expected_values = self._generate_expected_distribution(baseline_stats, len(current_values))
         
         # Calculate all statistical measures
         psi = calculate_psi(expected_values, current_values)
@@ -177,6 +186,43 @@ class DriftDetector:
             std = 1
         
         return np.random.normal(mean, std, n_samples)
+    
+    def _generate_from_histogram(
+        self,
+        bins: list,
+        counts: list,
+        n_samples: int,
+    ) -> np.ndarray:
+        """
+        Generate samples from histogram bins for better distribution preservation.
+        
+        Args:
+            bins: Histogram bin edges
+            counts: Histogram bin counts
+            n_samples: Number of samples to generate
+            
+        Returns:
+            Generated samples
+        """
+        if not bins or not counts or sum(counts) == 0:
+            # Fallback to uniform distribution if histogram is invalid
+            return np.random.uniform(0, 1, n_samples)
+        
+        # Normalize counts to probabilities
+        total_count = sum(counts)
+        probabilities = [c / total_count for c in counts]
+        
+        # Sample bin indices according to probabilities
+        bin_indices = np.random.choice(len(counts), size=n_samples, p=probabilities)
+        
+        # Generate random values within each selected bin
+        samples = []
+        for idx in bin_indices:
+            lower = bins[idx]
+            upper = bins[idx + 1]
+            samples.append(np.random.uniform(lower, upper))
+        
+        return np.array(samples)
     
     def _calculate_overall_score(self, feature_reports: Dict[str, FeatureReport]) -> float:
         """

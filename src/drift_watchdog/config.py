@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import yaml
+import re
 
 
 class Config:
@@ -35,6 +36,9 @@ class Config:
         """
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f) or {}
+        
+        # Validate configuration after loading
+        self._validate_config()
     
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -112,3 +116,92 @@ class Config:
     def exporter_interval(self) -> int:
         """Get exporter interval in seconds."""
         return self.get("exporter.interval_seconds", 300)
+    
+    def _validate_config(self) -> None:
+        """
+        Validate configuration values.
+        
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate PSI threshold
+        psi_threshold = self.get("detection.thresholds.psi", 0.2)
+        if not isinstance(psi_threshold, (int, float)) or psi_threshold < 0 or psi_threshold > 1:
+            raise ValueError("detection.thresholds.psi must be a number between 0 and 1")
+        
+        # Validate KS p-value threshold
+        ks_threshold = self.get("detection.thresholds.ks_pvalue", 0.05)
+        if not isinstance(ks_threshold, (int, float)) or ks_threshold < 0 or ks_threshold > 1:
+            raise ValueError("detection.thresholds.ks_pvalue must be a number between 0 and 1")
+        
+        # Validate detection methods
+        methods = self.get("detection.methods", ["psi", "ks_test"])
+        valid_methods = {"psi", "ks_test", "jensen_shannon", "wasserstein", "chi_squared"}
+        if not isinstance(methods, list):
+            raise ValueError("detection.methods must be a list")
+        for method in methods:
+            if method not in valid_methods:
+                raise ValueError(f"Invalid detection method: {method}. Valid methods: {valid_methods}")
+        
+        # Validate exporter port
+        port = self.get("exporter.port", 9090)
+        if not isinstance(port, int) or port < 1 or port > 65535:
+            raise ValueError("exporter.port must be an integer between 1 and 65535")
+        
+        # Validate exporter interval
+        interval = self.get("exporter.interval_seconds", 300)
+        if not isinstance(interval, int) or interval < 1:
+            raise ValueError("exporter.interval_seconds must be a positive integer")
+        
+        # Validate storage type
+        storage = self.get("baseline.storage", "local")
+        valid_storage = {"local", "s3", "gcs"}
+        if storage not in valid_storage:
+            raise ValueError(f"Invalid storage type: {storage}. Valid types: {valid_storage}")
+        
+        # Validate webhook URLs if present
+        if "alerts" in self.config:
+            alerts = self.config["alerts"]
+            
+            # Validate Slack webhook URL format
+            if "slack" in alerts and "webhook_url" in alerts["slack"]:
+                webhook_url = alerts["slack"]["webhook_url"]
+                if not self._is_valid_url(webhook_url):
+                    raise ValueError("Invalid Slack webhook URL format")
+            
+            # Validate PagerDuty routing key format
+            if "pagerduty" in alerts and "routing_key" in alerts["pagerduty"]:
+                # PagerDuty routing keys should be alphanumeric
+                routing_key = alerts["pagerduty"]["routing_key"]
+                if not isinstance(routing_key, str) or not routing_key:
+                    raise ValueError("PagerDuty routing key must be a non-empty string")
+            
+            # Validate webhook URL format
+            if "webhook" in alerts and "url" in alerts["webhook"]:
+                webhook_url = alerts["webhook"]["url"]
+                if not self._is_valid_url(webhook_url):
+                    raise ValueError("Invalid webhook URL format")
+    
+    def _is_valid_url(self, url: str) -> bool:
+        """
+        Validate URL format.
+        
+        Args:
+            url: URL to validate
+            
+        Returns:
+            True if URL is valid, False otherwise
+        """
+        if not isinstance(url, str) or not url:
+            return False
+        
+        # Basic URL validation regex
+        url_pattern = re.compile(
+            r'^https?://'  # http:// or https://
+            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain
+            r'localhost|'  # localhost
+            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # IP
+            r'(?::\d+)?'  # optional port
+            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        
+        return bool(url_pattern.match(url))

@@ -208,12 +208,14 @@ def calculate_chi_squared(
 
 def calculate_feature_statistics(
     data: pd.Series,
+    bins: int = 10,
 ) -> Dict[str, float]:
     """
     Calculate comprehensive statistics for a feature.
     
     Args:
         data: Feature data
+        bins: Number of bins for histogram
         
     Returns:
         Dictionary of statistics
@@ -229,7 +231,12 @@ def calculate_feature_statistics(
             "median": 0.0,
             "q25": 0.0,
             "q75": 0.0,
+            "histogram_bins": [],
+            "histogram_counts": [],
         }
+    
+    # Calculate histogram for better distribution preservation
+    counts, bin_edges = np.histogram(clean_data, bins=bins)
     
     return {
         "mean": float(clean_data.mean()),
@@ -239,4 +246,6 @@ def calculate_feature_statistics(
         "median": float(clean_data.median()),
         "q25": float(clean_data.quantile(0.25)),
         "q75": float(clean_data.quantile(0.75)),
+        "histogram_bins": bin_edges.tolist(),
+        "histogram_counts": counts.tolist(),
     }

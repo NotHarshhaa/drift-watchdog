@@ -16,14 +16,16 @@ from drift_watchdog.models import DriftResult
 class PrometheusExporter:
     """Export drift metrics to Prometheus."""
     
-    def __init__(self, port: int = 9090):
+    def __init__(self, port: int = 9090, api_key: Optional[str] = None):
         """
         Initialize Prometheus exporter.
         
         Args:
             port: Port to serve metrics on
+            api_key: Optional API key for authentication (Bearer token)
         """
         self.port = port
+        self.api_key = api_key
         
         # Define metrics
         self.psi_gauge = Gauge(
@@ -93,8 +95,32 @@ class PrometheusExporter:
                 self.exporter = exporter
                 super().__init__(*args, **kwargs)
             
+            def _authenticate(self) -> bool:
+                """Check if the request is authenticated."""
+                if self.exporter.api_key is None:
+                    return True  # No authentication required
+                
+                auth_header = self.headers.get("Authorization")
+                if auth_header is None:
+                    return False
+                
+                # Check for Bearer token
+                if not auth_header.startswith("Bearer "):
+                    return False
+                
+                token = auth_header[7:]  # Remove "Bearer " prefix
+                return token == self.exporter.api_key
+            
             def do_GET(self):
                 if self.path == "/metrics":
+                    # Check authentication
+                    if not self._authenticate():
+                        self.send_response(401)
+                        self.send_header("WWW-Authenticate", "Bearer")
+                        self.end_headers()
+                        self.wfile.write(b"Unauthorized")
+                        return
+                    
                     self.send_response(200)
                     self.send_header("Content-Type", CONTENT_TYPE_LATEST)
                     self.end_headers()
@@ -110,8 +136,11 @@ class PrometheusExporter:
             return MetricsHandler(self, *args, **kwargs)
         
         server = HTTPServer(("0.0.0.0", self.port), handler)
-        print(f"Prometheus metrics server running on port {self.port}")
+        auth_status = "with authentication" if self.api_key else "without authentication"
+        print(f"Prometheus metrics server running on port {self.port} ({auth_status})")
         print(f"Metrics available at http://localhost:{self.port}/metrics")
+        if self.api_key:
+            print("Authentication: Bearer token required")
         server.serve_forever()
     
     def check_with_timing(self, check_func, *args, **kwargs) -> DriftResult:

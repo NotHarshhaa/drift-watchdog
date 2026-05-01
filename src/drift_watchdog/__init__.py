@@ -1,6 +1,6 @@
 """drift-watchdog: Lightweight ML model drift detection."""
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 from drift_watchdog.detector import DriftDetector
 from drift_watchdog.baseline import BaselineStore
@@ -13,6 +13,7 @@ from drift_watchdog.performance_tracker import PerformanceTracker, PerformanceMe
 from drift_watchdog.correlation_analysis import CorrelationAnalyzer, CorrelationAnalysisResult
 from drift_watchdog.schema_validator import SchemaValidator, SchemaValidationResult
 from drift_watchdog.drift_explainer import DriftExplainer, DriftExplanationResult
+from drift_watchdog.audit_logger import AuditLogger, AuditLogEntry
 
 __all__ = [
     "DriftDetector",
@@ -37,5 +38,7 @@ __all__ = [
     "SchemaValidationResult",
     "DriftExplainer",
     "DriftExplanationResult",
+    "AuditLogger",
+    "AuditLogEntry",
     "__version__",
 ]

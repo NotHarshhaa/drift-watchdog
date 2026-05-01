@@ -30,9 +30,11 @@ Input distributions shift, upstream data pipelines change schema, feature encodi
 - **Custom thresholds per feature** — set different drift thresholds for different features
 - **Drift trend analysis** — track drift over time to detect gradual changes
 - **HTML report export** — generate beautiful, shareable HTML reports for drift analysis
-- **Prometheus exporter** — exposes `/metrics` endpoint, plug straight into your existing Grafana stack
+- **Prometheus exporter** — exposes `/metrics` endpoint with optional authentication, plug straight into your existing Grafana stack
 - **CLI first** — run ad-hoc drift checks in CI/CD or cron without writing any code
-- **Alert integrations** — Slack, PagerDuty, and webhook support
+- **Alert integrations** — Slack, PagerDuty, and webhook support with rate limiting
+- **Audit logging** — comprehensive audit logging for compliance and debugging
+- **Security features** — input validation, path sanitization, configuration validation, and sensitive data protection
 - **Framework agnostic** — works with scikit-learn, XGBoost, PyTorch, TensorFlow, or any model that takes tabular input
 - **Reference baseline management** — store, version, and compare against baselines in local files, S3, or GCS
 - **Lightweight** — no database, no server, no orchestrator required
@@ -178,6 +180,33 @@ drift-watchdog check \
 
 This provides detailed explanations of why drift occurred and suggested actions to take.
 
+### 11. Enable audit logging
+
+Enable comprehensive audit logging for compliance and debugging:
+
+```bash
+drift-watchdog check \
+  --baseline baselines/v1.json \
+  --current current_batch.csv \
+  --threshold 0.2 \
+  --audit-log audit.json
+```
+
+This creates a structured JSON log of all drift check operations.
+
+### 12. Secure Prometheus metrics with authentication
+
+Enable authentication for the Prometheus metrics endpoint:
+
+```python
+from drift_watchdog import PrometheusExporter
+
+exporter = PrometheusExporter(port=9090, api_key="your-secret-key")
+exporter.serve_forever()
+```
+
+Now metrics require a Bearer token: `curl -H "Authorization: Bearer your-secret-key" http://localhost:9090/metrics`
+
 ---
 
 ## Python API
@@ -317,8 +346,9 @@ It includes panels for:
 - [x] **v1.1** — Concept drift detection (output/label distribution monitoring), HTML report export
 - [x] **v1.2** — Data quality checks, feature importance weighting, custom thresholds per feature, drift trend analysis
 - [x] **v1.3** — Feature correlation analysis, schema validation, drift explanation generator, performance metrics tracking
-- [ ] **v1.4** — GitHub Actions integration, CI drift gate
-- [ ] **v1.5** — Multi-model support
+- [x] **v1.4** — Security hardening (authentication, input validation, audit logging), rate limiting, improved baseline distribution generation
+- [ ] **v1.5** — GitHub Actions integration, CI drift gate
+- [ ] **v1.6** — Multi-model support
 
 ---
 

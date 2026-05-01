@@ -7,6 +7,7 @@ import click
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+import os
 
 from rich.console import Console
 from rich.table import Table
@@ -32,9 +33,80 @@ from drift_watchdog.trend_analysis import DriftTrendAnalyzer
 from drift_watchdog.correlation_analysis import CorrelationAnalyzer
 from drift_watchdog.schema_validator import SchemaValidator
 from drift_watchdog.drift_explainer import DriftExplainer
+from drift_watchdog.audit_logger import AuditLogger
 
 # Create console instance
 console = Console()
+
+# Security constants
+MAX_FILE_SIZE_MB = 100
+ALLOWED_EXTENSIONS = {'.csv', '.json', '.yaml', '.yml'}
+
+
+def validate_file_path(file_path: str, must_exist: bool = False) -> Path:
+    """
+    Validate and sanitize file path to prevent path traversal attacks.
+    
+    Args:
+        file_path: Path to validate
+        must_exist: Whether the file must exist
+        
+    Returns:
+        Validated Path object
+        
+    Raises:
+        ValueError: If path is invalid
+    """
+    try:
+        path = Path(file_path).resolve()
+    except Exception as e:
+        raise ValueError(f"Invalid file path: {e}")
+    
+    # Check for path traversal attempts
+    if '..' in str(path):
+        raise ValueError("Path traversal detected: relative paths with '..' are not allowed")
+    
+    # Check if path is within current working directory or allowed directories
+    cwd = Path.cwd().resolve()
+    try:
+        path.relative_to(cwd)
+    except ValueError:
+        # Allow absolute paths that are not under CWD but check for suspicious patterns
+        if any(part.startswith('.') for part in path.parts):
+            raise ValueError("Hidden directories not allowed in path")
+    
+    if must_exist and not path.exists():
+        raise ValueError(f"File does not exist: {file_path}")
+    
+    # Check file extension
+    if path.suffix.lower() not in ALLOWED_EXTENSIONS and path.suffix != '':
+        raise ValueError(f"File extension '{path.suffix}' not allowed. Allowed: {ALLOWED_EXTENSIONS}")
+    
+    return path
+
+
+def validate_file_size(file_path: Path, max_size_mb: int = MAX_FILE_SIZE_MB) -> None:
+    """
+    Validate file size to prevent processing excessively large files.
+    
+    Args:
+        file_path: Path to file
+        max_size_mb: Maximum file size in MB
+        
+    Raises:
+        ValueError: If file is too large
+    """
+    if not file_path.exists():
+        return
+    
+    file_size = file_path.stat().st_size
+    max_size_bytes = max_size_mb * 1024 * 1024
+    
+    if file_size > max_size_bytes:
+        raise ValueError(
+            f"File too large: {file_size / (1024 * 1024):.2f}MB "
+            f"(maximum: {max_size_mb}MB)"
+        )
 
 
 def get_severity_style(severity: str) -> str:
@@ -224,25 +296,32 @@ def create_baseline(data: str, output: str, name: str, exclude: tuple, storage: 
     console.print()
     
     try:
+        # Validate input file path
+        data_path = validate_file_path(data, must_exist=True)
+        validate_file_size(data_path)
+        
         with Status(
             f"[bold yellow]Loading data from {data}...",
             console=console,
             spinner="dots",
         ):
             baseline_obj = BaselineStore.create_from_csv(
-                csv_path=data,
+                csv_path=str(data_path),
                 name=name,
                 exclude_features=list(exclude) if exclude else None,
             )
         
         console.print(f"[green]✓[/green] Loaded [bold]{len(baseline_obj.feature_names)}[/bold] features from dataset")
         
+        # Validate output path
+        output_path = validate_file_path(output)
+        
         with Status(
             f"[bold yellow]Saving baseline to {output}...",
             console=console,
             spinner="dots",
         ):
-            store = BaselineStore(path=output, storage_type=storage)
+            store = BaselineStore(path=str(output_path), storage_type=storage)
             store.save(baseline_obj)
         
         console.print(f"[green]✓[/green] Baseline saved successfully")
@@ -300,6 +379,7 @@ def create_baseline(data: str, output: str, name: str, exclude: tuple, storage: 
 @click.option("--feature-importance", "-fi", help="JSON file with feature importance weights")
 @click.option("--custom-thresholds", "-ct", help="JSON file with custom thresholds per feature")
 @click.option("--explain", "-e", is_flag=True, help="Generate drift explanation")
+@click.option("--audit-log", "-a", help="Path to audit log file")
 def check_drift(
     baseline: str,
     current: str,
@@ -311,37 +391,44 @@ def check_drift(
     feature_importance: Optional[str],
     custom_thresholds: Optional[str],
     explain: bool,
+    audit_log: Optional[str],
 ):
     """Run drift detection check."""
     console.print()
     console.print(Rule(title="[bold cyan]Drift Detection[/bold cyan]", style="cyan"))
     console.print()
     
+    # Initialize audit logger if specified
+    audit_logger = AuditLogger(log_file=audit_log) if audit_log else None
+    
     # Load configuration
     cfg = Config(config) if config else None
     
-    # Load baseline
+    # Validate and load baseline
+    baseline_path = validate_file_path(baseline, must_exist=True)
     with Status(
         f"[bold yellow]Loading baseline from {baseline}...",
         console=console,
         spinner="dots",
     ):
         try:
-            store = BaselineStore(path=baseline, storage_type="auto")
+            store = BaselineStore(path=str(baseline_path), storage_type="auto")
             baseline_obj = store.load()
         except Exception as e:
             console.print(f"[bold red]✗[/bold red] Failed to load baseline: {e}")
             sys.exit(1)
     console.print(f"[green]✓[/green] Baseline loaded: [bold]{baseline_obj.name}[/bold] (v{baseline_obj.version})")
     
-    # Load current data
+    # Validate and load current data
+    current_path = validate_file_path(current, must_exist=True)
+    validate_file_size(current_path)
     with Status(
         f"[bold yellow]Loading current data from {current}...",
         console=console,
         spinner="dots",
     ):
         try:
-            current_df = pd.read_csv(current)
+            current_df = pd.read_csv(str(current_path))
         except Exception as e:
             console.print(f"[bold red]✗[/bold red] Failed to load current data: {e}")
             sys.exit(1)
@@ -361,16 +448,20 @@ def check_drift(
     # Load feature importance if provided
     feature_importance_dict = {}
     if feature_importance:
+        fi_path = validate_file_path(feature_importance, must_exist=True)
+        validate_file_size(fi_path)
         import json
-        with open(feature_importance, 'r') as f:
+        with open(fi_path, 'r') as f:
             feature_importance_dict = json.load(f)
         console.print(f"[green]✓[/green] Loaded feature importance from [cyan]{feature_importance}[/cyan]")
     
     # Load custom thresholds if provided
     custom_thresholds_dict = {}
     if custom_thresholds:
+        ct_path = validate_file_path(custom_thresholds, must_exist=True)
+        validate_file_size(ct_path)
         import json
-        with open(custom_thresholds, 'r') as f:
+        with open(ct_path, 'r') as f:
             custom_thresholds_dict = json.load(f)
         console.print(f"[green]✓[/green] Loaded custom thresholds from [cyan]{custom_thresholds}[/cyan]")
     
@@ -427,6 +518,10 @@ def check_drift(
     console.print()
     console.print(Rule(style="cyan"))
     console.print()
+    
+    # Log audit entry if audit logger is enabled
+    if audit_logger:
+        audit_logger.log_drift_check(result, operation="drift_check", status="success")
     
     # Exit with error code if drift detected
     sys.exit(1 if result.overall_drift else 0)

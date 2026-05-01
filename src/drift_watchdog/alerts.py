@@ -4,8 +4,78 @@ import os
 import requests
 from typing import Optional, Dict, Any
 import json
+import time
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 from drift_watchdog.models import DriftResult
+
+
+class RateLimiter:
+    """Simple rate limiter for alert sending."""
+    
+    def __init__(self, max_alerts: int = 5, time_window_seconds: int = 300):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            max_alerts: Maximum number of alerts allowed in time window
+            time_window_seconds: Time window in seconds
+        """
+        self.max_alerts = max_alerts
+        self.time_window = timedelta(seconds=time_window_seconds)
+        self.alert_history = defaultdict(list)
+    
+    def can_send(self, alert_type: str = "default") -> bool:
+        """
+        Check if alert can be sent based on rate limit.
+        
+        Args:
+            alert_type: Type of alert for separate rate limiting
+            
+        Returns:
+            True if alert can be sent, False otherwise
+        """
+        now = datetime.utcnow()
+        
+        # Clean old entries outside time window
+        self.alert_history[alert_type] = [
+            timestamp for timestamp in self.alert_history[alert_type]
+            if now - timestamp < self.time_window
+        ]
+        
+        # Check if under limit
+        return len(self.alert_history[alert_type]) < self.max_alerts
+    
+    def record_alert(self, alert_type: str = "default") -> None:
+        """
+        Record that an alert was sent.
+        
+        Args:
+            alert_type: Type of alert
+        """
+        self.alert_history[alert_type].append(datetime.utcnow())
+    
+    def get_time_until_next_alert(self, alert_type: str = "default") -> float:
+        """
+        Get seconds until next alert can be sent.
+        
+        Args:
+            alert_type: Type of alert
+            
+        Returns:
+            Seconds until next alert, 0 if alert can be sent now
+        """
+        if self.can_send(alert_type):
+            return 0.0
+        
+        if not self.alert_history[alert_type]:
+            return 0.0
+        
+        # Calculate time until oldest alert is outside window
+        oldest_alert = min(self.alert_history[alert_type])
+        time_until = (oldest_alert + self.time_window - datetime.utcnow()).total_seconds()
+        return max(0.0, time_until)
 
 
 class SlackAlerter:
@@ -83,7 +153,8 @@ class SlackAlerter:
             response.raise_for_status()
             return True
         except Exception as e:
-            print(f"Failed to send Slack alert: {e}")
+            # Log error without exposing sensitive webhook URL
+            print(f"Failed to send Slack alert: {type(e).__name__}")
             return False
 
 
@@ -149,7 +220,8 @@ class PagerDutyAlerter:
             response.raise_for_status()
             return True
         except Exception as e:
-            print(f"Failed to send PagerDuty alert: {e}")
+            # Log error without exposing sensitive routing key
+            print(f"Failed to send PagerDuty alert: {type(e).__name__}")
             return False
 
 
@@ -189,22 +261,31 @@ class WebhookAlerter:
             response.raise_for_status()
             return True
         except Exception as e:
-            print(f"Failed to send webhook alert: {e}")
+            # Log error without exposing sensitive webhook URL
+            print(f"Failed to send webhook alert: {type(e).__name__}")
             return False
 
 
 class AlertManager:
     """Manage multiple alert channels."""
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        max_alerts: int = 5,
+        time_window_seconds: int = 300,
+    ):
         """
         Initialize alert manager.
         
         Args:
             config_path: Path to configuration file (optional)
+            max_alerts: Maximum number of alerts in time window
+            time_window_seconds: Time window for rate limiting in seconds
         """
         self.alerters = []
         self.config = {}
+        self.rate_limiter = RateLimiter(max_alerts, time_window_seconds)
         
         if config_path:
             self._load_config(config_path)
@@ -280,12 +361,13 @@ class AlertManager:
                 )
             )
     
-    def send_alert(self, result: DriftResult) -> bool:
+    def send_alert(self, result: DriftResult, alert_type: str = "default") -> bool:
         """
-        Send alert to all configured channels.
+        Send alert to all configured channels with rate limiting.
         
         Args:
             result: Drift detection result
+            alert_type: Type of alert for rate limiting
             
         Returns:
             True if at least one alert was sent successfully
@@ -293,9 +375,19 @@ class AlertManager:
         if not result.overall_drift:
             return True
         
+        # Check rate limit
+        if not self.rate_limiter.can_send(alert_type):
+            time_until = self.rate_limiter.get_time_until_next_alert(alert_type)
+            print(f"Rate limit exceeded. Next alert allowed in {time_until:.0f} seconds")
+            return False
+        
         success = False
         for alerter in self.alerters:
             if alerter.send(result):
                 success = True
+        
+        # Record that an alert was sent
+        if success:
+            self.rate_limiter.record_alert(alert_type)
         
         return success
